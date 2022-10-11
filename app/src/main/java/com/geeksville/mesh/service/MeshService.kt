@@ -180,6 +180,9 @@ class MeshService : Service(), Logging {
         }
     }
 
+    private var lastMessage: ByteArray? = null;
+    private var lastMessageId: Int = 0;
+
     /** Send a command/packet to our radio.  But cope with the possiblity that we might start up
     before we are fully bound to the RadioInterfaceService
     @param requireConnected set to false if you are okay with using a partially connected device (i.e. during startup)
@@ -192,7 +195,18 @@ class MeshService : Service(), Logging {
         if (SoftwareUpdateService.isUpdating)
             throw IsUpdatingException()
 
+        /* Resend last message until it is queued successfully */
+        while (lastMessage != null) {
+            Thread.sleep(100);
+            val l = lastMessage ?: break;
+            radioInterfaceService.sendToRadio(l);
+        }
+
         radioInterfaceService.sendToRadio(b)
+        if (p.packet != null) {
+            lastMessage = b;
+            lastMessageId = p.packet.id;
+        }
     }
 
     /**
@@ -1145,6 +1159,7 @@ class MeshService : Service(), Logging {
                 MeshProtos.FromRadio.NODE_INFO_FIELD_NUMBER -> handleNodeInfo(proto.nodeInfo)
                 MeshProtos.FromRadio.CONFIG_FIELD_NUMBER -> handleDeviceConfig(proto.config)
                 MeshProtos.FromRadio.MODULECONFIG_FIELD_NUMBER -> handleModuleConfig(proto.moduleConfig)
+                MeshProtos.FromRadio.QUEUESTATUS_FIELD_NUMBER -> handleQueueStatus(proto.queueStatus)
                 else -> errormsg("Unexpected FromRadio variant")
             }
         } catch (ex: InvalidProtocolBufferException) {
@@ -1183,6 +1198,17 @@ class MeshService : Service(), Logging {
         )
         insertMeshLog(packetToSave)
         // setModuleConfig(config)
+    }
+
+    private var queueStatus: MeshProtos.QueueStatus? = null;
+
+    private fun handleQueueStatus(queueStatus: MeshProtos.QueueStatus) {
+        this.queueStatus = queueStatus
+        if (queueStatus.res == 0)
+            if (this.lastMessageId == queueStatus.meshPacketId)
+                this.lastMessage = null;
+            else
+                warn("Expected reply for packet ID ${this.lastMessageId}, got for ${queueStatus.meshPacketId}")
     }
 
     /**
